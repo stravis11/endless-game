@@ -1,0 +1,14 @@
+{
+  "name": "endless-game",
+  "version": "1.0.0",
+  "description": "A calm, endless, procedurally generated three.js world to roam.",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.cjs",
+    "test": "node tests/verify.cjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "three": "^0.186.0"
+  }
+}

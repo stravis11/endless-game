@@ -1,0 +1,4 @@
+node_modules/
+verification/frame.png
+/tmp/endless-game-verify.log
+.DS_Store
