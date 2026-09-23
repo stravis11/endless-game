@@ -1,0 +1,68 @@
+[
+  {
+    "id": "G7",
+    "name": "free roam input moves player",
+    "pass": true,
+    "evidence": "start=(4.0,4.0) end=(1.6,0.7)"
+  },
+  {
+    "id": "G1",
+    "name": "endless streaming, no gaps/fallbacks",
+    "pass": true,
+    "evidence": "chunks requested=227 loaded=227 failed=0 fallback=0"
+  },
+  {
+    "id": "G2",
+    "name": ">= 8 distinct biomes in wide sample",
+    "pass": true,
+    "evidence": "10 distinct: {\"lavenderFlats\":69,\"sakuraHills\":81,\"mossyFen\":48,\"pineHighlands\":75,\"meadow\":177,\"birchGrove\":81,\"frostVale\":33,\"coralShore\":30,\"starPlateau\":12,\"amberDesert\":69}"
+  },
+  {
+    "id": "G3",
+    "name": "surprise rarity curve (common > uncommon, rare rare)",
+    "pass": true,
+    "evidence": "total=1204 common=884 uncommon=271 rare=49 (rare share 4.07%)"
+  },
+  {
+    "id": "G4",
+    "name": "6+ species spawn near player",
+    "pass": true,
+    "evidence": "{\"trufflePig\":31,\"mossTurtle\":18,\"berrySprite\":15,\"puffhopper\":32,\"cloudSheep\":21,\"lanternFox\":13,\"skyWisp\":12,\"glassHeron\":25}"
+  },
+  {
+    "id": "G4b",
+    "name": "interaction: reaction + dialogue + journal",
+    "pass": true,
+    "evidence": "{\"ok\":true,\"line\":\"I rate this soil four snouts out of five.\",\"species\":\"Truffle Pig\",\"reaction\":\"Truffle Pig decides to tag along\",\"gift\":null,\"followed\":true}"
+  },
+  {
+    "id": "G4c",
+    "name": "gift/companion path exists",
+    "pass": true,
+    "evidence": "{\"ok\":true,\"line\":\"Slow down. The moss is lovely this time of year.\",\"species\":\"Moss Turtle\",\"reaction\":\"Moss Turtle decides to tag along\",\"gift\":null,\"followed\":true}"
+  },
+  {
+    "id": "G5",
+    "name": "no damage/fail mechanic; ambient events scheduled",
+    "pass": true,
+    "evidence": "damage mechanics: false; ambient events: fireflies, butterflies, rain, fallingLeaves, snow, birds, aurora, shootingStars, windGusts, waves; day phase: dawn"
+  },
+  {
+    "id": "G6",
+    "name": "live WebGL scene: sky, terrain, props, creatures",
+    "pass": true,
+    "evidence": "webgl=true meshes=1336 groups=197 chunks=143 entities=12 avgFrame=48.92ms canvas=1280x633"
+  },
+  {
+    "id": "G8",
+    "name": "no console errors/warnings through session",
+    "pass": true,
+    "evidence": "0 errors/warnings"
+  },
+  {
+    "id": "G7b",
+    "name": "stable pacing (avg frame < 80ms headless)",
+    "pass": true,
+    "evidence": "avgFrame=48.93ms"
+  }
+]

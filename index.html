@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Endless Game — a calm world to roam</title>
+<style>
+  :root {
+    --ink: #2c3230; --paper: #f7f2e8; --accent: #7a9e7e; --dim: #6a705f;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #0e1420; }
+  body { font-family: ui-rounded, 'Segoe UI', system-ui, sans-serif; color: var(--ink); }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(20, 26, 24, 0.55); backdrop-filter: blur(6px); z-index: 10; transition: opacity 0.6s; }
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+  .card { background: var(--paper); border-radius: 18px; padding: 40px 48px; max-width: 560px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.4); text-align: center; }
+  .card h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.5px; color: #3a4a3c; }
+  .card p { margin-top: 14px; line-height: 1.6; color: var(--dim); font-size: 16px; }
+  .keys { margin-top: 22px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .key { background: #ece5d4; border-radius: 10px; padding: 8px 14px; font-size: 14px; color: #4a5248; }
+  .key b { color: #2c3230; }
+  .cta { margin-top: 26px; background: var(--accent); color: #fff; border: none; border-radius: 12px;
+    padding: 14px 34px; font-size: 17px; cursor: pointer; transition: transform 0.15s, background 0.15s; }
+  .cta:hover { transform: translateY(-2px); background: #6a8e6e; }
+
+  #hud { position: fixed; top: 18px; left: 18px; z-index: 5; pointer-events: none; }
+  #biome-chip { background: rgba(247, 242, 232, 0.88); border-radius: 12px; padding: 8px 16px;
+    font-size: 14px; color: var(--ink); box-shadow: 0 4px 16px rgba(0,0,0,0.18); }
+  #biome-chip small { display: block; color: var(--dim); font-size: 11.5px; margin-top: 2px; }
+
+  #journal { position: fixed; right: 18px; top: 18px; width: 300px; max-height: 70vh; overflow-y: auto;
+    z-index: 5; background: rgba(247, 242, 232, 0.92); border-radius: 14px; padding: 16px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.22); transition: transform 0.4s, opacity 0.4s; }
+  #journal.hidden { transform: translateX(120%); opacity: 0; }
+  #journal h2 { font-size: 15px; color: #3a4a3c; border-bottom: 2px solid #e0d8c4; padding-bottom: 8px; }
+  #journal ul { list-style: none; margin-top: 10px; }
+  #journal li { font-size: 13px; line-height: 1.5; padding: 7px 0; border-bottom: 1px dashed #e6ddca; color: #4a5248; }
+  #journal li b { color: #2c3230; }
+  #journal li .time { color: #9a947e; font-size: 11px; }
+
+  #speech { position: fixed; left: 50%; bottom: 15%; transform: translateX(-50%); z-index: 6;
+    background: rgba(247, 242, 232, 0.95); border-radius: 16px; padding: 14px 22px; max-width: 480px;
+    text-align: center; font-size: 16px; line-height: 1.5; color: var(--ink);
+    box-shadow: 0 10px 32px rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.4s; pointer-events: none; }
+  #speech.show { opacity: 1; }
+  #speech .who { display: block; font-size: 12px; color: var(--accent); font-weight: 700; margin-bottom: 4px; letter-spacing: 0.4px; }
+  #speech .gift { display: block; margin-top: 8px; font-size: 13.5px; color: #a8763e; }
+
+  #hint { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 5;
+    color: rgba(247,242,232,0.85); font-size: 13px; background: rgba(20,26,24,0.45);
+    padding: 8px 18px; border-radius: 20px; transition: opacity 0.5s; }
+  #hint.hidden { opacity: 0; }
+  #discovery { position: fixed; top: 84px; left: 50%; transform: translateX(-50%); z-index: 7;
+    background: linear-gradient(135deg, #f5e8c8, #eed8a8); border-radius: 14px; padding: 12px 26px;
+    font-size: 15px; color: #5a4a2a; box-shadow: 0 10px 36px rgba(0,0,0,0.35);
+    opacity: 0; transition: opacity 0.5s, transform 0.5s; pointer-events: none; }
+  #discovery.show { opacity: 1; transform: translateX(-50%) translateY(6px); }
+  #discovery b { display: block; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #a8863e; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud"><div id="biome-chip">…<small></small></div></div>
+
+<aside id="journal" class="hidden">
+  <h2>Field Journal</h2>
+  <ul id="journal-list"></ul>
+</aside>
+
+<div id="speech"></div>
+<div id="discovery"></div>
+<div id="hint">Click to wander · WASD walk · E greet · J journal · Shift stroll faster</div>
+
+<div id="intro" class="overlay">
+  <div class="card">
+    <h1>endless game</h1>
+    <p>A calm, endless world generated just for you. There is nothing to win.
+       Walk any direction, meet whoever lives there, and notice small wonders —
+       the world keeps going, and so can you.</p>
+    <div class="keys">
+      <span class="key"><b>WASD</b> walk</span>
+      <span class="key"><b>Mouse</b> look</span>
+      <span class="key"><b>E</b> greet</span>
+      <span class="key"><b>J</b> journal</span>
+    </div>
+    <button class="cta" id="start-btn">Step outside</button>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./node_modules/three/build/three.module.js" } }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
