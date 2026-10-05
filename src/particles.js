@@ -26,6 +26,8 @@ class ParticleSystem {
     this.vz = vz || 0;
     this.ground = ground;
     this.flicker = flicker;
+    this.opacity = opacity;
+    this.fade = 0; // 0..1, eased in on start and out on stop
     this.points = makePoints(count, color, size, opacity);
     this.vels = new Float32Array(count * 3);
     this.rng = mulberry32(count * 7919 + 3);
@@ -52,11 +54,12 @@ class ParticleSystem {
     }
     pos.needsUpdate = true;
     this.points.visible = true;
-    this.points.material.opacity = 0.9;
   }
 
   update(dt, playerPos) {
-    if (!this.active) return;
+    if (!this.points.visible) return;
+    this.fade = Math.max(0, Math.min(1, this.fade + (this.active ? dt : -dt) / 3));
+    if (!this.active && this.fade === 0) { this.points.visible = false; return; }
     this.t += dt;
     const pos = this.points.geometry.attributes.position;
     for (let i = 0; i < this.count; i++) {
@@ -72,16 +75,14 @@ class ParticleSystem {
       pos.setXYZ(i, x, y, z);
     }
     pos.needsUpdate = true;
-    if (this.flicker) {
-      this.points.material.opacity = 0.55 + 0.45 * Math.abs(Math.sin(this.t * 2.1));
-    }
+    const flicker = this.flicker ? 0.55 + 0.45 * Math.abs(Math.sin(this.t * 2.1)) : 1;
+    this.points.material.opacity = this.opacity * flicker * this.fade;
     // Drift the emitter with the player so particles are always around.
     this.center.lerp(playerPos, Math.min(1, dt * 0.4));
   }
 
   stop() {
     this.active = false;
-    this.points.visible = false;
   }
 }
 
@@ -91,7 +92,7 @@ class AuroraSystem {
     const geo = new THREE.PlaneGeometry(600, 140, 48, 1);
     const mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, side: THREE.DoubleSide,
-      uniforms: { time: { value: 0 } },
+      uniforms: { time: { value: 0 }, fade: { value: 0 } },
       vertexShader: `
         varying vec2 vUv;
         uniform float time;
@@ -105,11 +106,12 @@ class AuroraSystem {
       fragmentShader: `
         varying vec2 vUv;
         uniform float time;
+        uniform float fade;
         void main() {
           float band = smoothstep(0.0, 0.35, vUv.y) * (1.0 - smoothstep(0.55, 1.0, vUv.y));
           float wave = 0.65 + 0.35 * sin(vUv.x * 22.0 + time * 1.1);
           vec3 col = mix(vec3(0.45, 0.85, 0.65), vec3(0.55, 0.6, 0.95), 0.5 + 0.5 * sin(vUv.x * 7.0 + time * 0.3));
-          gl_FragColor = vec4(col, band * wave * 0.34);
+          gl_FragColor = vec4(col, band * wave * 0.34 * fade);
         }`,
     });
     this.mesh = new THREE.Mesh(geo, mat);
@@ -125,12 +127,15 @@ class AuroraSystem {
     this.base = center.clone();
   }
   update(dt, playerPos) {
-    if (!this.active) return;
+    if (!this.mesh.visible) return;
+    const u = this.mesh.material.uniforms;
+    u.fade.value = Math.max(0, Math.min(1, u.fade.value + (this.active ? dt : -dt) / 6));
+    if (!this.active && u.fade.value === 0) { this.mesh.visible = false; return; }
     this.t += dt;
-    this.mesh.material.uniforms.time.value = this.t;
+    u.time.value = this.t;
     this.mesh.position.set(playerPos.x, playerPos.y + 85, playerPos.z - 160);
   }
-  stop() { this.active = false; this.mesh.visible = false; }
+  stop() { this.active = false; }
 }
 
 class ShootingStarsSystem {
@@ -204,7 +209,7 @@ class BirdFlockSystem {
     this.to = center.clone().add(new THREE.Vector3(280, 55 + Math.random() * 20, -40 - Math.random() * 80));
   }
   update(dt, playerPos) {
-    if (!this.active) return;
+    if (!this.group.visible) return; // a flock that has set off finishes its crossing
     this.t += dt;
     const f = this.t / 34;
     this.group.position.lerpVectors(this.from, this.to, f);
@@ -213,9 +218,9 @@ class BirdFlockSystem {
       b.position.set(Math.sin(a) * 2.2 + (i % 3) * 2.4 - 2.4, Math.cos(a * 0.7) * 1.1 + Math.floor(i / 3) * 2.2, Math.cos(a) * 2.2);
       b.rotation.y = Math.sin(a) * 0.35;
     });
-    if (f >= 1) this.stop();
+    if (f >= 1) { this.active = false; this.group.visible = false; }
   }
-  stop() { this.active = false; this.group.visible = false; }
+  stop() { this.active = false; }
 }
 
 export function buildAmbientSystems(scene) {

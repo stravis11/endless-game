@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { WORLD, BIOMES, SEED } from './worldData.js';
 import { initShared, GEOS, MATS } from './props.js';
-import { buildChunk, chunkStats, pickSurprise, surveySurprises } from './chunks.js';
+import { buildChunk, chunkStats, pickSurprise, surveySurprises, setWaterTime } from './chunks.js';
 import { heightAt, biomeIdAt } from './terrain.js';
 import { EntityField } from './entities.js';
 import { Sky, Ambience } from './atmosphere.js';
@@ -20,7 +20,7 @@ renderer.toneMappingExposure = 1.05;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0xcfe0ee, 0.0016);
+scene.fog = new THREE.FogExp2(0xcfe0ee, 0.0042);
 
 const camera = new THREE.PerspectiveCamera(66, window.innerWidth / window.innerHeight, 0.1, 1200);
 camera.position.set(0, 8, 0);
@@ -63,11 +63,6 @@ function ensureChunk(cx, cz) {
   }
   worldGroup.add(built.group);
   chunks.set(key, { group: built.group, meta: built });
-  // Journal a surprise the first time its chunk is built near the player.
-  if (built.surprise) {
-    const wx = cx * cs + cs / 2, wz = cz * cs + cs / 2;
-    maybeAnnounceDiscovery(built.surprise, wx, wz);
-  }
 }
 
 function cullChunks(px, pz) {
@@ -77,7 +72,8 @@ function cullChunks(px, pz) {
     if (Math.abs(cx - pcx) > R + 1 || Math.abs(cz - pcz) > R + 1) {
       worldGroup.remove(ch.group);
       ch.group.traverse((o) => {
-        if (o.geometry && o.geometry !== GEOS.cube && o.geometry !== GEOS.sphere) o.geometry.dispose();
+        if (o.isInstancedMesh) o.dispose(); // frees the per-chunk instance buffer
+        else if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose();
       });
       chunks.delete(key);
     }
@@ -117,15 +113,30 @@ const player = {
   onGround: true,
 };
 
+// Start on dry, gently rolling land: spiral out from the origin until we find it.
+for (let i = 0; i < 400; i++) {
+  const a = i * 0.7, r = i * 4;
+  const x = 4 + Math.cos(a) * r, z = 4 + Math.sin(a) * r;
+  const h = heightAt(x, z);
+  if (h > 1.5 && h < 8 && Math.abs(heightAt(x + 6, z) - h) < 1.5 && Math.abs(heightAt(x, z + 6) - h) < 1.5) {
+    player.pos.x = x; player.pos.z = z;
+    break;
+  }
+}
 player.pos.y = heightAt(player.pos.x, player.pos.z) + 1.7;
 
 const keys = {};
 addEventListener('keydown', (e) => {
   keys[e.code] = true;
+  if (e.repeat) return;
   if (e.code === 'KeyE') tryInteract();
   if (e.code === 'KeyJ') toggleJournal();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
+// A key released while the window is unfocused never sends keyup; without this
+// the player keeps walking on their own after alt-tab or Esc.
+function releaseKeys() { for (const k in keys) keys[k] = false; }
+addEventListener('blur', releaseKeys);
 
 const canvas = renderer.domElement;
 let pointerLocked = false;
@@ -138,9 +149,17 @@ function requestLock(e) {
   } catch {}
 }
 canvas.addEventListener('click', (e) => { if (started && !pointerLocked) requestLock(e); });
-document.addEventListener('pointerlockchange', () => { pointerLocked = document.pointerLockElement === canvas; });
+const pausedEl = document.getElementById('paused');
+pausedEl.addEventListener('click', (e) => { pausedEl.classList.add('hidden'); requestLock(e); });
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === canvas;
+  if (!pointerLocked) releaseKeys();
+  pausedEl.classList.toggle('hidden', pointerLocked || !started);
+});
 document.addEventListener('mousemove', (e) => {
   if (!pointerLocked) return;
+  // Some browsers report a huge jump on the first move after locking; ignore it.
+  if (Math.abs(e.movementX) > 250 || Math.abs(e.movementY) > 250) return;
   player.yaw -= e.movementX * 0.0023;
   player.pitch -= e.movementY * 0.0023;
   player.pitch = Math.max(-1.2, Math.min(1.2, player.pitch));
@@ -173,12 +192,12 @@ function updatePlayer(dt) {
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch;
 
-  // Gentle head-bob when moving; very subtle.
-  if (moving) {
-    const t = performance.now() / 1000;
-    camera.position.y += Math.sin(t * (run ? 9 : 6.5)) * (run ? 0.075 : 0.05);
-  }
+  // Gentle head-bob that follows actual speed, so it eases in and out.
+  const pace = Math.hypot(player.vel.x, player.vel.z);
+  bobPhase += pace * dt * 0.9;
+  camera.position.y += Math.sin(bobPhase) * Math.min(1, pace / player.speedWalk) * 0.05;
 }
+let bobPhase = 0;
 
 /* ---------------------------------------------------------------- HUD */
 
@@ -189,6 +208,7 @@ const speechEl = document.getElementById('speech');
 const discoveryEl = document.getElementById('discovery');
 const hintEl = document.getElementById('hint');
 const introEl = document.getElementById('intro');
+const promptEl = document.getElementById('prompt');
 
 const journal = [];
 let journalOpen = false;
@@ -213,8 +233,8 @@ function toggleJournal() {
 }
 
 let speechTimer = null;
-function showSpeech(who, line, gift) {
-  speechEl.innerHTML = `<span class="who">${who}</span>${line}${gift ? `<span class="gift">They gave you ${gift}.</span>` : ''}`;
+function showSpeech(who, line, gift, reaction) {
+  speechEl.innerHTML = `<span class="who">${who}</span>${line}${reaction ? `<span class="reaction">${reaction}</span>` : ''}${gift ? `<span class="gift">They gave you ${gift}.</span>` : ''}`;
   speechEl.classList.add('show');
   clearTimeout(speechTimer);
   speechTimer = setTimeout(() => speechEl.classList.remove('show'), 4200);
@@ -228,15 +248,23 @@ function showDiscovery(label) {
   discoveryTimer = setTimeout(() => discoveryEl.classList.remove('show'), 4600);
 }
 
+/* A surprise counts as found when you actually walk up to it. Big rare
+   landmarks register from further away, since you can see them coming. */
+const FIND_RADIUS = { common: 16, uncommon: 26, rare: 40 };
 const announced = new Set();
-function maybeAnnounceDiscovery(surprise, wx, wz) {
-  const key = surprise.id + '@' + Math.floor(wx / cs) + ',' + Math.floor(wz / cs);
-  if (announced.has(key)) return;
-  announced.add(key);
-  const dist = Math.hypot(wx - player.pos.x, wz - player.pos.z);
-  if (dist < cs * (R + 1)) {
-    showDiscovery(surprise.label);
-    addJournal(`Found ${surprise.label}.`, 'discovery');
+function checkDiscoveries() {
+  const pcx = Math.floor(player.pos.x / cs), pcz = Math.floor(player.pos.z / cs);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      const key = chunkKey(pcx + dx, pcz + dz);
+      const s = chunks.get(key)?.meta.surprise;
+      if (!s || s.x === undefined || announced.has(key)) continue;
+      if (Math.hypot(s.x - player.pos.x, s.z - player.pos.z) < FIND_RADIUS[s.tier]) {
+        announced.add(key);
+        showDiscovery(s.label);
+        addJournal(`Found ${s.label}.`, 'discovery');
+      }
+    }
   }
 }
 
@@ -246,7 +274,7 @@ function tryInteract() {
   const e = entityField.nearest(7);
   if (!e) return;
   const r = e.interact();
-  showSpeech(r.species, r.line, r.gift);
+  showSpeech(r.species, r.line, r.gift, r.reaction);
   addJournal(`Talked with ${r.species}. They said: “${r.line}”`);
   if (r.gift) addJournal(`${r.species} gave you ${r.gift}.`, 'gift');
 }
@@ -270,6 +298,7 @@ camera.position.set(player.pos.x, player.pos.y + 2, player.pos.z);
 let last = performance.now();
 let elapsed = 0;
 let frameSamples = [];
+let hudTimer = 0;
 let ambientSampleLog = [];
 
 function tick(now) {
@@ -288,35 +317,27 @@ function tick(now) {
   entityField.setPlayerPos(player.pos);
   entityField.update(player.pos, dt, elapsed);
   sky.update(dt, player.pos);
-  scene.fog.density = sky.fogDensity ?? scene.fog.density;
-  ambience.update(dt, player.pos);
+  scene.fog.color.copy(sky.fogColor);
+  scene.fog.density = sky.fogDensity;
+  const b = biomeIdAt(player.pos.x, player.pos.z);
+  ambience.update(dt, player.pos, b, sky.phase);
+  setWaterTime(elapsed);
 
-  // Water: layered sine waves + sun-glint-friendly normals.
-  for (const [, ch] of chunks) {
-    for (const child of ch.group.children) {
-      if (child.userData?.isWater) {
-        const t = elapsed;
-        const attr = child.geometry.attributes.position;
-        const base = child.geometry.userData.base;
-        const px = child.position.x, pz = child.position.z;
-        for (let i = 0; i < attr.count; i++) {
-          const bx = base[i * 3] + px, bz = base[i * 3 + 2] + pz;
-          attr.setY(i,
-            Math.sin(bx * 0.42 + t * 1.6) * 0.42 +
-            Math.sin(bz * 0.61 - t * 1.1) * 0.3 +
-            Math.sin((bx + bz * 0.7) * 0.3 + t * 0.75) * 0.22);
-        }
-        attr.needsUpdate = true;
-        child.geometry.computeVertexNormals();
-      }
-    }
+  if (started) {
+    checkDiscoveries();
+    // Offer a greeting when someone is close enough to hear it.
+    const near = entityField.nearest(7);
+    const text = near ? `E · say hello to the ${near.def.label}` : '';
+    if (promptEl.textContent !== text) promptEl.textContent = text;
+    promptEl.classList.toggle('show', !!near);
   }
 
-  // Biome chip
-  const b = biomeIdAt(player.pos.x, player.pos.z);
-  if (b !== lastBiome) {
-    lastBiome = b;
-    biomeChip.innerHTML = `${BIOMES[b].label}<small>${Math.round(player.pos.x)}, ${Math.round(player.pos.z)} · ${chunks.size} chunks</small>`;
+  // Biome chip, refreshed a few times a second.
+  hudTimer -= dt;
+  if (hudTimer <= 0) {
+    hudTimer = 0.25;
+    const chip = `${BIOMES[b].label}<small>${Math.round(player.pos.x)}, ${Math.round(player.pos.z)} · ${sky.phase}</small>`;
+    if (chip !== lastBiome) { lastBiome = chip; biomeChip.innerHTML = chip; }
   }
 
   if (frameSamples.length < 600) frameSamples.push(dt);
@@ -391,7 +412,7 @@ window.__GAME__ = {
       if (!e) return { ok: false };
       entityField.setPlayerPos(player.pos);
       const r = e.interact();
-      showSpeech(r.species, r.line, r.gift);
+      showSpeech(r.species, r.line, r.gift, r.reaction);
       addJournal(`Talked with ${r.species}. They said: “${r.line}”`);
       if (r.gift) addJournal(`${r.species} gave you ${r.gift}.`, 'gift');
       return { ok: true, ...r };
@@ -409,5 +430,6 @@ window.__GAME__ = {
       };
     },
     teleport(x, z) { player.pos.x = x; player.pos.z = z; },
+    setTime(t) { sky.time = ((t % 1) + 1) % 1; },
   },
 };

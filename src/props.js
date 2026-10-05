@@ -48,6 +48,11 @@ export function initShared() {
   MATS.fabricRed = lam(0xd87f6f);
   MATS.fabricTeal = lam(0x6fa8a0);
   MATS.glass = new THREE.MeshLambertMaterial({ color: 0xd0e8e8, transparent: true, opacity: 0.6 });
+  MATS.springWater = new THREE.MeshLambertMaterial({ color: 0xbfe8e2, transparent: true, opacity: 0.75, emissive: 0x2a4a44, emissiveIntensity: 0.4 });
+  MATS.meteorCore = new THREE.MeshBasicMaterial({ color: 0xa8d8ff });
+
+  // Shared resources outlive any one chunk; chunk culling must not dispose them.
+  for (const g of Object.values(GEOS)) g.userData.shared = true;
 }
 
 /* Each prop kind is a list of parts:
@@ -168,7 +173,6 @@ export function buildPropInstances(group, kind, positions) {
     const total = positions.length * matParts.length;
     const geo = GEOS[geoName];
     const mesh = new THREE.InstancedMesh(geo, MATS[matName], total);
-    mesh.frustumCulled = false;
     mesh.castShadow = false;
     mesh.receiveShadow = false;
     let idx = 0;
@@ -184,6 +188,8 @@ export function buildPropInstances(group, kind, positions) {
       }
     }
     mesh.instanceMatrix.needsUpdate = true;
+    // Bound the instances (in chunk space) so off-screen chunks are culled.
+    mesh.computeBoundingSphere();
     group.add(mesh);
   }
 }

@@ -50,7 +50,15 @@
     box-shadow: 0 10px 32px rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.4s; pointer-events: none; }
   #speech.show { opacity: 1; }
   #speech .who { display: block; font-size: 12px; color: var(--accent); font-weight: 700; margin-bottom: 4px; letter-spacing: 0.4px; }
-  #speech .gift { display: block; margin-top: 8px; font-size: 13.5px; color: #a8763e; }
+  #speech .gift { display: block; margin-top: 8px; font-size: 13.5px; color: #8a5a28; }
+  #speech .reaction { display: block; margin-top: 6px; font-size: 13px; font-style: italic; color: var(--dim); }
+
+  #prompt { position: fixed; left: 50%; bottom: 8%; transform: translateX(-50%); z-index: 5;
+    background: rgba(20, 26, 24, 0.55); color: #f7f2e8; font-size: 14px; padding: 8px 18px;
+    border-radius: 20px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  #prompt.show { opacity: 1; }
+  .card .touch-note { display: none; margin-top: 18px; font-size: 14px; color: #8a5a28; }
+  @media (pointer: coarse) { .card .touch-note { display: block; } }
 
   #hint { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 5;
     color: rgba(247,242,232,0.85); font-size: 13px; background: rgba(20,26,24,0.45);
@@ -76,7 +84,15 @@
 
 <div id="speech"></div>
 <div id="discovery"></div>
+<div id="prompt"></div>
 <div id="hint">Click to wander · WASD walk · E greet · J journal · Shift stroll faster</div>
+
+<div id="paused" class="overlay hidden">
+  <div class="card">
+    <h1>paused</h1>
+    <p>The world will wait. Click anywhere to keep wandering.</p>
+  </div>
+</div>
 
 <div id="intro" class="overlay">
   <div class="card">
@@ -90,12 +106,13 @@
       <span class="key"><b>E</b> greet</span>
       <span class="key"><b>J</b> journal</span>
     </div>
+    <p class="touch-note">Best on a computer — this world needs a keyboard and mouse to explore.</p>
     <button class="cta" id="start-btn">Step outside</button>
   </div>
 </div>
 
 <script type="importmap">
-{ "imports": { "three": "./node_modules/three/build/three.module.js" } }
+{ "imports": { "three": "./vendor/three/three.module.js" } }
 </script>
 <script type="module" src="./src/main.js"></script>
 </body>

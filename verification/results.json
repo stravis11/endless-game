@@ -3,13 +3,13 @@
     "id": "G7",
     "name": "free roam input moves player",
     "pass": true,
-    "evidence": "start=(4.0,4.0) end=(1.6,0.7)"
+    "evidence": "start=(10.7,47.5) end=(-1.6,32.3)"
   },
   {
     "id": "G1",
     "name": "endless streaming, no gaps/fallbacks",
     "pass": true,
-    "evidence": "chunks requested=227 loaded=227 failed=0 fallback=0"
+    "evidence": "chunks requested=231 loaded=231 failed=0 fallback=0"
   },
   {
     "id": "G2",
@@ -27,31 +27,31 @@
     "id": "G4",
     "name": "6+ species spawn near player",
     "pass": true,
-    "evidence": "{\"trufflePig\":31,\"mossTurtle\":18,\"berrySprite\":15,\"puffhopper\":32,\"cloudSheep\":21,\"lanternFox\":13,\"skyWisp\":12,\"glassHeron\":25}"
+    "evidence": "{\"cloudSheep\":25,\"mossTurtle\":29,\"trufflePig\":33,\"skyWisp\":25,\"berrySprite\":14,\"puffhopper\":30,\"lanternFox\":23,\"glassHeron\":18}"
   },
   {
     "id": "G4b",
     "name": "interaction: reaction + dialogue + journal",
     "pass": true,
-    "evidence": "{\"ok\":true,\"line\":\"I rate this soil four snouts out of five.\",\"species\":\"Truffle Pig\",\"reaction\":\"Truffle Pig decides to tag along\",\"gift\":null,\"followed\":true}"
+    "evidence": "{\"ok\":true,\"line\":\"I count shepherds to fall asleep.\",\"species\":\"Cloud Sheep\",\"reaction\":\"Cloud Sheep hops with delight\",\"gift\":\"a perfectly round berry\",\"followed\":false}"
   },
   {
     "id": "G4c",
     "name": "gift/companion path exists",
     "pass": true,
-    "evidence": "{\"ok\":true,\"line\":\"Slow down. The moss is lovely this time of year.\",\"species\":\"Moss Turtle\",\"reaction\":\"Moss Turtle decides to tag along\",\"gift\":null,\"followed\":true}"
+    "evidence": "{\"ok\":true,\"line\":\"The wind told me a secret. It tickles.\",\"species\":\"Sky Wisp\",\"reaction\":\"Sky Wisp decides to tag along\",\"gift\":null,\"followed\":true}"
   },
   {
     "id": "G5",
     "name": "no damage/fail mechanic; ambient events scheduled",
     "pass": true,
-    "evidence": "damage mechanics: false; ambient events: fireflies, butterflies, rain, fallingLeaves, snow, birds, aurora, shootingStars, windGusts, waves; day phase: dawn"
+    "evidence": "damage mechanics: false; ambient events: fireflies, butterflies, rain, fallingLeaves, snow, birds, aurora, shootingStars, windGusts, waves; day phase: day"
   },
   {
     "id": "G6",
     "name": "live WebGL scene: sky, terrain, props, creatures",
     "pass": true,
-    "evidence": "webgl=true meshes=1336 groups=197 chunks=143 entities=12 avgFrame=48.92ms canvas=1280x633"
+    "evidence": "webgl=true meshes=2394 groups=212 chunks=143 entities=12 avgFrame=49.12ms canvas=1280x633"
   },
   {
     "id": "G8",
@@ -63,6 +63,6 @@
     "id": "G7b",
     "name": "stable pacing (avg frame < 80ms headless)",
     "pass": true,
-    "evidence": "avgFrame=48.93ms"
+    "evidence": "avgFrame=49.13ms"
   }
 ]

@@ -2,13 +2,58 @@
    and rare procedural surprises. buildChunk(cx, cz) is deterministic. */
 import * as THREE from 'three';
 import { mulberry32, hash2 } from './rng.js';
-import { WORLD, BIOMES, SURPRISES, SEED } from './worldData.js';
-import { heightAt, surfaceColor, biomeIdAt } from './terrain.js';
+import { WORLD, BIOMES, BIOME_KEYS, SURPRISES, SEED } from './worldData.js';
+import { heightAt, surfaceColor, biomeIdAt, biomeBilinear } from './terrain.js';
 import { GEOS, MATS, buildPropInstances, resolveKind, hasPropKind } from './props.js';
 
 export const chunkStats = { requested: 0, loaded: 0, failed: 0, fallback: 0 };
 
 const _c = new THREE.Color();
+
+/* ---------------- shared terrain + water resources ---------------- */
+
+let groundMat = null;
+let waterGeo = null;
+let waterMat = null;
+const waterTime = { value: 0 };
+
+/* Waves are displaced on the GPU from world position, so neighbouring water
+   tiles line up and nothing is recomputed on the CPU each frame. Flat shading
+   derives facet normals in the fragment shader, so the displaced faces light. */
+function sharedWater() {
+  if (waterMat) return;
+  waterGeo = new THREE.PlaneGeometry(WORLD.chunkSize, WORLD.chunkSize, 28, 28);
+  waterGeo.rotateX(-Math.PI / 2);
+  waterGeo.userData.shared = true;
+  waterMat = new THREE.MeshPhongMaterial({
+    color: 0x6fb8d4, transparent: true, opacity: 0.82,
+    emissive: 0x122b36, emissiveIntensity: 0.3,
+    shininess: 55, specular: 0xb8dcf0,
+    flatShading: true,
+  });
+  waterMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = waterTime;
+    shader.vertexShader = 'uniform float uTime;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+      vec4 wWorld = modelMatrix * vec4(transformed, 1.0);
+      transformed.y += sin(wWorld.x * 0.42 + uTime * 1.6) * 0.14
+                     + sin(wWorld.z * 0.61 - uTime * 1.1) * 0.10
+                     + sin((wWorld.x + wWorld.z * 0.7) * 0.3 + uTime * 0.75) * 0.08;`,
+    );
+  };
+}
+
+export function setWaterTime(t) { waterTime.value = t; }
+
+/* Weight of one biome at a world point, using the same bilinear blend as the
+   terrain colours, so props thin out exactly where the ground changes. */
+function biomeWeightAt(biome, x, z) {
+  const { ids, w } = biomeBilinear(x, z);
+  let sum = 0;
+  for (let i = 0; i < 4; i++) if (ids[i] === biome) sum += w[i];
+  return sum;
+}
 
 function groundPart(group, geoName, matName, x, y, z, sx, sy, sz, rotY = 0, tiltX = 0, tiltZ = 0) {
   const mesh = new THREE.Mesh(GEOS[geoName], MATS[matName]);
@@ -75,8 +120,7 @@ const SURPRISE_BUILDERS = {
   },
   hotSpring(g, rng) {
     groundPart(g, 'torus', 'stone', 0, 0.18, 0, 6.4, 1.5, 6.4, 0, Math.PI / 2);
-    const pool = groundPart(g, 'cylinder', 'glass', 0, 0.16, 0, 5.6, 0.24, 5.6);
-    pool.material = new THREE.MeshLambertMaterial({ color: 0xbfe8e2, transparent: true, opacity: 0.75, emissive: 0x2a4a44, emissiveIntensity: 0.4 });
+    groundPart(g, 'cylinder', 'springWater', 0, 0.16, 0, 5.6, 0.24, 5.6);
   },
   giantMushroom(g, rng) {
     groundPart(g, 'cylinder', 'shell', 0, 2.0, 0, 1.6, 4.0, 1.6);
@@ -147,8 +191,7 @@ const SURPRISE_BUILDERS = {
     groundPart(g, 'cube', 'stone', 0, 2.4, -0.5, 0.5, 4.8, 0.5);
     groundPart(g, 'cube', 'stone', 0, 2.4, 0.5, 0.5, 4.8, 0.5);
     groundPart(g, 'cube', 'stone', 0, 5.0, 0, 0.5, 0.5, 1.6);
-    const door = groundPart(g, 'cube', 'doorGlow', 0, 2.3, 0.15, 0.14, 4.4, 1.3, 0, 0, 0.18);
-    door.material = MATS.doorGlow;
+    groundPart(g, 'cube', 'doorGlow', 0, 2.3, 0.15, 0.14, 4.4, 1.3, 0, 0, 0.18);
   },
   giantSnail(g, rng) {
     groundPart(g, 'sphere', 'bark', 0, 1.5, 0, 3.4, 2.8, 3.0);
@@ -160,8 +203,7 @@ const SURPRISE_BUILDERS = {
   },
   meteorGarden(g, rng) {
     groundPart(g, 'icosahedron', 'rockDark', 0, 1.0, 0, 3.6, 2.0, 3.6, rng() * 3);
-    const core = groundPart(g, 'icosahedron', 'flowerGlow', 0, 1.7, 0, 1.1, 1.1, 1.1);
-    core.material = new THREE.MeshBasicMaterial({ color: 0xa8d8ff });
+    groundPart(g, 'icosahedron', 'meteorCore', 0, 1.7, 0, 1.1, 1.1, 1.1);
     for (let i = 0; i < 9; i++) {
       const a = rng() * Math.PI * 2, r = 2.6 + rng() * 2.6;
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
@@ -227,78 +269,92 @@ export function buildChunk(cx, cz) {
   const rng = mulberry32((Math.imul(cx, 73856093) ^ Math.imul(cz, 83492791) ^ SEED) >>> 0);
 
   /* --- terrain geometry --- */
+  // Heights on a grid one ring wider than the chunk, so normals at the edges
+  // use real neighbour heights and match the adjacent chunk exactly (no seams).
+  const step = size / segs;
+  const gw = segs + 3;
+  const grid = new Float32Array(gw * gw);
+  for (let j = 0; j < gw; j++) {
+    for (let i = 0; i < gw; i++) {
+      grid[j * gw + i] = heightAt(cx * size - size / 2 + (i - 1) * step, cz * size - size / 2 + (j - 1) * step);
+    }
+  }
   const geo = new THREE.PlaneGeometry(size, size, segs, segs);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
+  const nrm = geo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
-  const heights = new Float32Array(pos.count);
-  for (let i = 0; i < pos.count; i++) {
-    const wx = cx * size + pos.getX(i);
-    const wz = cz * size + pos.getZ(i);
-    const h = heightAt(wx, wz);
-    pos.setY(i, h);
-    heights[i] = h;
-    surfaceColor(wx, wz, h, _c);
-    colors[i * 3] = _c.r; colors[i * 3 + 1] = _c.g; colors[i * 3 + 2] = _c.b;
+  let minH = Infinity, maxH = -Infinity;
+  const _n = new THREE.Vector3();
+  for (let v = 0; v < pos.count; v++) {
+    const i = Math.round((pos.getX(v) + size / 2) / step) + 1;
+    const j = Math.round((pos.getZ(v) + size / 2) / step) + 1;
+    const h = grid[j * gw + i];
+    pos.setY(v, h);
+    if (h < minH) minH = h;
+    if (h > maxH) maxH = h;
+    _n.set(grid[j * gw + i - 1] - grid[j * gw + i + 1], 2 * step, grid[(j - 1) * gw + i] - grid[(j + 1) * gw + i]).normalize();
+    nrm.setXYZ(v, _n.x, _n.y, _n.z);
+    surfaceColor(cx * size + pos.getX(v), cz * size + pos.getZ(v), h, _c);
+    colors[v * 3] = _c.r; colors[v * 3 + 1] = _c.g; colors[v * 3 + 2] = _c.b;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
 
-  const groundMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  if (!groundMat) groundMat = new THREE.MeshLambertMaterial({ vertexColors: true });
   const ground = new THREE.Mesh(geo, groundMat);
-  ground.receiveShadow = false;
-  ground.castShadow = false;
   group.add(ground);
 
   /* --- water (only if the chunk dips below sea level) --- */
-  let hasWater = false;
-  let minH = Infinity, maxH = -Infinity;
-  for (let i = 0; i < pos.count; i++) { minH = Math.min(minH, heights[i]); maxH = Math.max(maxH, heights[i]); }
-  if (minH < WORLD.waterLevel + 0.35) {
-    hasWater = true;
-    const wgeo = new THREE.PlaneGeometry(size, size, 56, 56);
-    wgeo.rotateX(-Math.PI / 2);
-    // Store base positions so the animation can wave around them.
-    const wpos = wgeo.attributes.position;
-    wgeo.userData.base = wpos.array.slice();
-    const wmat = new THREE.MeshPhongMaterial({
-      color: 0x6fb8d4, transparent: true, opacity: 0.8,
-      emissive: 0x122b36, emissiveIntensity: 0.3,
-      shininess: 55, specular: 0xb8dcf0,
-      flatShading: true,
-    });
-    const water = new THREE.Mesh(wgeo, wmat);
+  const hasWater = minH < WORLD.waterLevel + 0.35;
+  if (hasWater) {
+    sharedWater();
+    const water = new THREE.Mesh(waterGeo, waterMat);
     water.position.y = WORLD.waterLevel;
-    water.userData.isWater = true;
     group.add(water);
   }
 
   /* --- props --- */
-  const biomeCounts = {};
-  const propCounts = {};
+  // Every biome touching this chunk scatters its own props, each one kept
+  // with probability equal to that biome's blend weight at the spot. Borders
+  // dither smoothly instead of switching at the chunk edge.
   const biome = biomeIdAt(cx * size + size / 2, cz * size + size / 2);
-  biomeCounts[biome] = (biomeCounts[biome] || 0) + 1;
-
-  const bdef = BIOMES[biome];
+  const biomeCounts = { [biome]: 1 };
+  const propCounts = {};
+  const present = new Set();
+  for (const [ox, oz] of [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0, 0]]) {
+    const { ids, w } = biomeBilinear(cx * size + ox * size, cz * size + oz * size);
+    for (let i = 0; i < 4; i++) if (w[i] > 0) present.add(ids[i]);
+  }
   const area = size * size;
-  for (const { kind, density } of bdef.props) {
-    const count = Math.max(0, Math.round(density * (area / 10000) * 4));
-    const positions = [];
-    for (let i = 0; i < count; i++) {
-      const x = (rng() - 0.5) * (size - 6);
-      const z = (rng() - 0.5) * (size - 6);
-      const wx = cx * size + x, wz = cz * size + z;
-      const h = heightAt(wx, wz);
-      if (h < WORLD.waterLevel + 0.25 && kind !== 'reed') continue; // keep land props dry
-      if (h > 13 && !['pine', 'rock', 'iceShard', 'monolith'].includes(kind)) continue; // alpine line
-      const s = 0.7 + rng() * 0.7;
-      positions.push({ x, y: h - 0.05, z, s, rot: rng() * Math.PI * 2 });
+  const byKind = new Map(); // resolved kind -> positions, merged across biomes
+  for (const b of BIOME_KEYS) {
+    if (!present.has(b)) continue;
+    for (const { kind, density } of BIOMES[b].props) {
+      const count = Math.max(0, Math.round(density * (area / 10000) * 4));
+      const positions = [];
+      for (let i = 0; i < count; i++) {
+        const x = (rng() - 0.5) * size;
+        const z = (rng() - 0.5) * size;
+        const keep = rng();
+        const wx = cx * size + x, wz = cz * size + z;
+        if (keep >= biomeWeightAt(b, wx, wz)) continue;
+        const h = heightAt(wx, wz);
+        if (h < WORLD.waterLevel + 0.25 && kind !== 'reed') continue; // keep land props dry
+        if (h > 13 && !['pine', 'rock', 'iceShard', 'monolith'].includes(kind)) continue; // alpine line
+        const s = 0.7 + rng() * 0.7;
+        positions.push({ x, y: h - 0.05, z, s, rot: rng() * Math.PI * 2 });
+      }
+      const resolved = resolveKind(kind, b, rng);
+      if (positions.length && hasPropKind(resolved)) {
+        if (!byKind.has(resolved)) byKind.set(resolved, []);
+        byKind.get(resolved).push(...positions);
+      }
     }
-    const resolved = resolveKind(kind, biome, rng);
-    if (positions.length && hasPropKind(resolved)) {
-      buildPropInstances(group, resolved, positions);
-      propCounts[resolved] = (propCounts[resolved] || 0) + positions.length;
-    }
+  }
+  for (const [kind, positions] of byKind) {
+    buildPropInstances(group, kind, positions);
+    propCounts[kind] = positions.length;
   }
 
   /* --- surprise --- */
@@ -307,13 +363,20 @@ export function buildChunk(cx, cz) {
     const builder = SURPRISE_BUILDERS[surprise.id];
     if (builder) {
       const sg = new THREE.Group();
-      // Place near chunk middle-ish but off the exact centre for variety.
-      const sx = (rng() - 0.5) * size * 0.4;
-      const sz = (rng() - 0.5) * size * 0.4;
-      const h = heightAt(cx * size + sx, cz * size + sz);
+      // Near the chunk middle, off-centre for variety, and on dry land when
+      // there is any (a picnic at the bottom of a lake is no surprise).
+      let sx = 0, sz = 0, h = 0;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        sx = (rng() - 0.5) * size * 0.6;
+        sz = (rng() - 0.5) * size * 0.6;
+        h = heightAt(cx * size + sx, cz * size + sz);
+        if (h > WORLD.waterLevel + 0.6) break;
+      }
       sg.position.set(sx, h - 0.1, sz);
       builder(sg, rng);
       group.add(sg);
+      surprise.x = cx * size + sx;
+      surprise.z = cz * size + sz;
     }
   }
 

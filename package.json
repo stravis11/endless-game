@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node scripts/serve.cjs",
-    "test": "node tests/verify.cjs"
+    "test": "node tests/verify.cjs",
+    "vendor": "mkdir -p vendor/three && cp node_modules/three/build/three.module.js node_modules/three/build/three.core.js node_modules/three/LICENSE vendor/three/"
   },
   "license": "MIT",
   "dependencies": {

@@ -2,7 +2,7 @@
    All soft, all optional, all peaceful. */
 import * as THREE from 'three';
 import { mulberry32 } from './rng.js';
-import { AMBIENT_EVENTS } from './worldData.js';
+import { AMBIENT_EVENTS, BIOMES } from './worldData.js';
 
 const SKY_VERT = `
 varying vec3 vWorldPos;
@@ -62,7 +62,10 @@ export class Sky {
     scene.add(this.ambient);
 
     this.dayLength = 420; // seconds per full cycle
-    this.time = 0.28; // start mid-morning
+    this.time = 0.4; // start mid-morning
+    this.fogColor = new THREE.Color(0xcfe0ee);
+    this.fogDensity = 0.0042;
+    this._sunDir = new THREE.Vector3();
   }
 
   update(dt, playerPos) {
@@ -70,16 +73,16 @@ export class Sky {
     const ang = this.time * Math.PI * 2 - Math.PI / 2;
     const sunY = Math.sin(ang);
     const sunX = Math.cos(ang) * 0.6;
-    const sunDir = new THREE.Vector3(sunX, Math.max(sunY, -0.35), 0.35).normalize();
+    const sunDir = this._sunDir.set(sunX, Math.max(sunY, -0.35), 0.35).normalize();
     this.uniforms.sunDir.value.copy(sunDir);
 
     // Palette drift across the day: night -> dawn -> noon -> dusk.
     const t = this.time;
     const dayAmt = smooth01(sunY);
-    const nightC = { top: 0x2a3555, mid: 0x3d4a6b, bot: 0x55607e, sun: 0xaab8d8, light: 0.28, fogN: 0.0035 };
-    const dawnC = { top: 0x8a9ad8, mid: 0xe8b8a0, bot: 0xf5d9b8, sun: 0xffc890, light: 0.9, fogN: 0.0022 };
-    const dayC = { top: 0x7fb2e8, mid: 0xcfe0ee, bot: 0xf2e8d8, sun: 0xfff0d0, light: 1.5, fogN: 0.0016 };
-    const duskC = { top: 0x6a7ab8, mid: 0xe8a88a, bot: 0xf0c8a0, sun: 0xffb070, light: 0.85, fogN: 0.0024 };
+    const nightC = { top: 0x2a3555, mid: 0x3d4a6b, bot: 0x55607e, sun: 0xaab8d8, light: 0.28, fogN: 0.0058 };
+    const dawnC = { top: 0x8a9ad8, mid: 0xe8b8a0, bot: 0xf5d9b8, sun: 0xffc890, light: 0.9, fogN: 0.0048 };
+    const dayC = { top: 0x7fb2e8, mid: 0xcfe0ee, bot: 0xf2e8d8, sun: 0xfff0d0, light: 1.5, fogN: 0.0042 };
+    const duskC = { top: 0x6a7ab8, mid: 0xe8a88a, bot: 0xf0c8a0, sun: 0xffb070, light: 0.85, fogN: 0.0048 };
 
     const P = mixPalettes(nightC, dawnC, dayC, duskC, t, sunY);
     this.uniforms.topColor.value.setHex(P.top);
@@ -87,14 +90,18 @@ export class Sky {
     this.uniforms.botColor.value.setHex(P.bot);
     this.uniforms.sunColor.value.setHex(P.sun);
     this.sun.intensity = P.light * (0.35 + 0.65 * dayAmt);
-    this.hemi.intensity = 0.5 + 0.4 * dayAmt;
-    this.ambient.intensity = 0.22 + 0.16 * dayAmt;
+    // Fill light fades with the sun (same daytime values), so nights are dark.
+    this.hemi.intensity = 0.15 + 0.75 * dayAmt;
+    this.ambient.intensity = 0.12 + 0.26 * dayAmt;
     this.sun.color.setHex(P.sun);
 
     this.sun.position.copy(sunDir).multiplyScalar(300).add(playerPos);
     this.sun.target.position.copy(playerPos);
     this.sun.target.updateMatrixWorld();
     this.dome.position.copy(playerPos);
+    // Distant terrain fades into the horizon colour of the sky dome, so the
+    // edge of the streamed world is never visible against a mismatched sky.
+    this.fogColor.setHex(P.mid);
     this.fogDensity = P.fogN;
   }
 
@@ -111,8 +118,10 @@ function smooth01(v) { return Math.min(1, Math.max(0, v * 1.6 + 0.25)); }
 
 function mixPalettes(N, D, Day, K, t, sunY) {
   // Segment-based blending: night->dawn->day->dusk->night.
-  const stops = [0.0, 0.24, 0.30, 0.70, 0.78, 1.0];
-  const pals = [N, N, D, Day, K, N];
+  // Hold full daylight through the middle of the day and full dark through
+  // the night; dawn and dusk are short transitions around sunrise/sunset.
+  const stops = [0.0, 0.20, 0.27, 0.36, 0.64, 0.74, 0.82, 1.0];
+  const pals = [N, N, D, Day, Day, K, N, N];
   let i = 0;
   while (i < stops.length - 2 && t > stops[i + 1]) i++;
   const a = stops[i], b = stops[i + 1];
@@ -128,22 +137,32 @@ function mixPalettes(N, D, Day, K, t, sunY) {
   };
 }
 
+const _mixA = new THREE.Color(), _mixB = new THREE.Color();
 function mixHex(h1, h2, f) {
-  const c1 = new THREE.Color(h1), c2 = new THREE.Color(h2);
-  return c1.lerp(c2, f).getHex();
+  return _mixA.setHex(h1).lerp(_mixB.setHex(h2), f).getHex();
 }
 
 /* ---------------- ambient events ---------------- */
 
+/* Events that suit any landscape; the rest come from the biome's own list. */
+const ANYWHERE = new Set(['birds', 'windGusts']);
+/* Events that only make sense at certain times of day. */
+const WHEN = {
+  fireflies: ['dusk', 'night'],
+  aurora: ['night'],
+  shootingStars: ['night'],
+  butterflies: ['dawn', 'day'],
+};
+
 export class Ambience {
   constructor(scene) {
     this.scene = scene;
-    this.active = new Map(); // id -> {endTime, group}
+    this.active = new Map(); // id -> {endTime, label}
     this.nextAt = new Map(); // id -> next start time
     this.clock = 0;
     this.history = [];
     this.rng = mulberry32(0xA1E);
-    for (const ev of AMBIENT_EVENTS) this.nextAt.set(ev.id, this.rng() * ev.meanGap);
+    for (const ev of AMBIENT_EVENTS) this.nextAt.set(ev.id, this.rng() * ev.meanGap * 0.5);
     this.systems = {};
   }
 
@@ -151,29 +170,40 @@ export class Ambience {
     this.systems[id] = system;
   }
 
-  update(dt, playerPos) {
+  fits(id, biome, phase) {
+    const b = BIOMES[biome];
+    if (!ANYWHERE.has(id) && !(b && b.ambient.includes(id))) return false;
+    return !WHEN[id] || WHEN[id].includes(phase);
+  }
+
+  /* biome and phase decide what may happen here and now. */
+  update(dt, playerPos, biome, phase) {
     this.clock += dt;
     for (const ev of AMBIENT_EVENTS) {
-      const startAt = this.nextAt.get(ev.id);
-      if (this.clock >= startAt && !this.active.has(ev.id)) {
-        const dur = ev.dur * (0.7 + this.rng() * 0.6);
-        this.active.set(ev.id, { endTime: this.clock + dur, label: ev.label });
-        this.history.push({ id: ev.id, start: this.clock, dur });
-        if (this.history.length > 400) this.history.shift();
-        const sys = this.systems[ev.id];
-        if (sys) sys.start(playerPos);
+      if (this.active.has(ev.id) || this.clock < this.nextAt.get(ev.id)) continue;
+      if (!this.fits(ev.id, biome, phase)) {
+        this.nextAt.set(ev.id, this.clock + 8); // not here, not now: look again soon
+        continue;
       }
+      const dur = ev.dur * (0.7 + this.rng() * 0.6);
+      this.active.set(ev.id, { endTime: this.clock + dur, label: ev.label });
+      this.history.push({ id: ev.id, start: this.clock, dur });
+      if (this.history.length > 400) this.history.shift();
+      const sys = this.systems[ev.id];
+      if (sys) sys.start(playerPos);
     }
     for (const [id, st] of [...this.active]) {
-      const sys = this.systems[id];
-      if (sys) sys.update(dt, playerPos, st);
-      if (this.clock >= st.endTime) {
+      // Wandering out of the biome (or into daylight) ends an event early.
+      if (this.clock >= st.endTime || !this.fits(id, biome, phase)) {
         this.active.delete(id);
+        const sys = this.systems[id];
         if (sys) sys.stop();
         const ev = AMBIENT_EVENTS.find((e) => e.id === id);
         this.nextAt.set(id, this.clock + ev.meanGap * (0.5 + this.rng()));
       }
     }
+    // Systems keep updating after stop() so they can fade out gently.
+    for (const sys of Object.values(this.systems)) sys.update(dt, playerPos);
   }
 
   snapshot() {

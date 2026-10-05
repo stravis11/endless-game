@@ -18,7 +18,17 @@ export class Entity {
     this.wanderAngle = mulberry32(worldSeedSalt ^ 0xBEEF)() * Math.PI * 2;
     this.state = 'wander';
     this.speed = def.speed * (0.8 + mulberry32(worldSeedSalt ^ 0x77)() * 0.4);
-    this.group = buildCreature(def, worldSeedSalt);
+    // Outer group = position + heading; inner body = scale + bob/hop offsets.
+    this.body = buildCreature(def, worldSeedSalt);
+    this.body.scale.setScalar(0.001);
+    this.group = new THREE.Group();
+    this.group.add(this.body);
+    this.heading = this.wanderAngle;
+    this.age = 0;
+    this.hopT = 0;
+    this.moving = false;
+    this.leaving = false;
+    this.leaveT = 0;
     this.befriended = false;
     this.giftGiven = false;
     this.lineIndex = Math.floor(Math.random() * def.lines.length);
@@ -32,16 +42,21 @@ export class Entity {
     toPlayer.y = 0;
     const dist = toPlayer.length();
 
+    this.moving = false;
     if (this.following) {
-      // Follow at a respectful distance.
+      // Follow at a respectful distance, facing the player.
+      this.wanderAngle = Math.atan2(toPlayer.x, toPlayer.z);
       if (dist > 4.5) {
         toPlayer.normalize();
         this.pos.addScaledVector(toPlayer, def.speed * 1.35 * dt);
+        this.moving = true;
       } else if (dist < 2.6) {
         this.pos.addScaledVector(toPlayer.normalize(), -def.speed * 0.4 * dt);
+        this.moving = true;
       }
       this.pos.y = groundYFor(this);
       this.group.position.copy(this.pos);
+      this.animate(dt, time);
       return;
     }
 
@@ -63,10 +78,45 @@ export class Entity {
     }
     this.pos.y = groundYFor(this);
     this.group.position.copy(this.pos);
-    this.group.rotation.y = this.wanderAngle + Math.PI;
+    this.animate(dt, time);
   }
 
-  wangleSafe() { return this.wanderAngle; }
+  /* Heading, appear/leave scaling, idle bob, walking hops, greeting hop. */
+  animate(dt, time) {
+    const def = this.def;
+    // Bodies are modelled facing +z; turn smoothly toward the travel heading.
+    let d = this.wanderAngle - this.heading;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    this.heading += d * Math.min(1, dt * 5);
+    this.group.rotation.y = this.heading;
+
+    this.age += dt;
+    const a = Math.min(1, this.age / 0.8);
+    let scale = a * a * (3 - 2 * a);
+    if (this.leaving) {
+      this.leaveT += dt;
+      scale *= Math.max(0, 1 - this.leaveT / 0.6);
+    }
+    this.body.scale.setScalar(Math.max(0.001, scale));
+
+    let y = 0;
+    if (def.kind === 'floater' || def.kind === 'flutter') {
+      y += Math.sin(time * 1.6 + this.phase) * 0.22;
+      for (const c of this.body.children) {
+        if (c.userData.orbit === undefined) continue;
+        const ang = c.userData.orbit + time * 1.8;
+        c.position.x = Math.cos(ang) * 0.5 * def.size;
+        c.position.z = Math.sin(ang) * 0.5 * def.size;
+      }
+    } else if (this.moving && (def.kind === 'hopper' || def.kind === 'trotter')) {
+      y += Math.abs(Math.sin(time * 7 + this.phase)) * 0.3 * def.size;
+    }
+    if (this.hopT > 0) {
+      this.hopT = Math.max(0, this.hopT - dt);
+      y += Math.sin(Math.PI * (1 - this.hopT / 0.7)) * 0.7;
+    }
+    this.body.position.y = y;
+  }
 
   /* Land animals stay out of the water; swimmers/waders/flyers go anywhere. */
   tryMove(dir, dist) {
@@ -76,6 +126,7 @@ export class Entity {
     if (aquatic || heightAt(nx, nz) >= 0.3) {
       this.pos.x = nx;
       this.pos.z = nz;
+      this.moving = true;
     } else {
       // Gently steer away from the shoreline.
       this.wanderAngle += 1.1;
@@ -84,6 +135,7 @@ export class Entity {
 
   interact() {
     const def = this.def;
+    this.hopT = 0.7; // a visible little hop of delight
     this.lineIndex = (this.lineIndex + 1) % def.lines.length;
     const line = def.lines[this.lineIndex];
     const result = { ok: true, line, species: def.label, reaction: '', gift: null, followed: false };
@@ -109,6 +161,7 @@ export class Entity {
   dispose() {
     this.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
     });
   }
 }
@@ -270,9 +323,10 @@ export class EntityField {
   update(playerPos, dt, time) {
     const targetCount = 12;
     const R = 70;
-    // Despawn far ones
+    // Far ones shrink away, then go.
     for (const [id, e] of this.entities) {
-      if (e.pos.distanceTo(playerPos) > R + 30) {
+      if (!e.leaving && e.pos.distanceTo(playerPos) > R + 30) e.leaving = true;
+      if (e.leaving && e.leaveT >= 0.6) {
         e.dispose();
         this.scene.remove(e.group);
         this.entities.delete(id);
@@ -301,6 +355,7 @@ export class EntityField {
     let best = null, bestD = maxDist;
     if (!this.playerPos) return null;
     for (const e of this.entities.values()) {
+      if (e.leaving) continue;
       const dd = e.pos.distanceTo(this.playerPos);
       if (dd < bestD) { best = e; bestD = dd; }
     }

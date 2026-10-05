@@ -5,6 +5,10 @@ no build step, no backend, no fail state.
 
 ## Play
 
+**Live:** https://stravis11.github.io/endless-game/ (desktop browser, keyboard and mouse)
+
+Or run it locally:
+
 ```bash
 npm start          # serves http://localhost:8087
 ```
@@ -29,6 +33,7 @@ Open the URL in a browser, click "Step outside", and wander.
 | `src/atmosphere.js` | day/night sky shader, sun/hemisphere lights, ambient-event scheduler |
 | `src/particles.js` | fireflies, rain, snow, leaves, birds, aurora, shooting stars |
 | `src/rng.js` | deterministic hash/value-noise/fBm — same seed, same world |
+| `vendor/three/` | pinned copy of three.js r186 so the static site runs without `node_modules` (`npm run vendor` refreshes it) |
 
 ## Verification
 
